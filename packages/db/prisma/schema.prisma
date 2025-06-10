@@ -1,0 +1,296 @@
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("NEON_DB_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// ---- Core Models ----
+model User {
+  id            String         @id @default(uuid())
+  githubId      String         @unique
+  name          String?
+  email         String?        @unique
+  avatar        String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  sessions      Session[]
+  repositories  Repository[]
+  conversations Conversation[]
+  apiUsage      ApiUsage[]
+  vapiCalls     VapiCall[]
+}
+
+model Session {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+}
+
+model Repository {
+  id            String          @id @default(uuid())
+  githubUrl     String          @unique
+  name          String
+  fullName      String          // owner/repo-name
+  description   String?
+  language      String?         // Primary language
+  stars         Int             @default(0)
+  forks         Int             @default(0)
+  size          Int             @default(0) // KB
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Status tracking
+  status        ProcessingStatus @default(PENDING)
+  errorMessage  String?
+  
+  // Timestamps  
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  lastSynced    DateTime?
+  
+  // Relations
+  embeddings    CodeEmbedding[]
+  analyses      CodeAnalysis[]
+  conversations Conversation[]
+  fileStructure FileNode[]
+  insights      RepoInsight[]
+}
+
+// ---- File Structure Models ----
+model FileNode {
+  id           String     @id @default(uuid())
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  
+  path         String     // Full path from repo root
+  name         String     // File/folder name
+  type         FileType   // FILE or DIRECTORY
+  size         Int?       // Bytes (null for directories)
+  language     String?    // Detected language for files
+  parentPath   String?    // Parent directory path
+  
+  createdAt    DateTime   @default(now())
+  
+  @@unique([repositoryId, path])
+}
+
+// ---- AI/Code Analysis Models ----
+model CodeEmbedding {
+  id           String     @id @default(uuid())
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  
+  path         String     // e.g., "src/auth/service.ts"
+  content      String     // Code snippet/chunk
+  vector       Unsupported("vector(1536)")? // Using sentence-transformers or OpenAI embeddings
+  language     String?    // "typescript", "python", etc.
+  startLine    Int?       // Starting line number
+  endLine      Int?       // Ending line number
+  chunkIndex   Int        @default(0) // For large files split into chunks
+  
+  // Metadata for better retrieval
+  metadata     Json?      // Function names, classes, imports, etc.
+  
+  // Embedding model info
+  embeddingModel String   @default("all-MiniLM-L6-v2") // Track which model was used
+  
+  createdAt    DateTime   @default(now())
+  
+  @@unique([repositoryId, path, chunkIndex])
+}
+
+model CodeAnalysis {
+  id           String        @id @default(uuid())
+  repositoryId String
+  repository   Repository    @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  
+  type         AnalysisType  // ARCHITECTURE, AUTH_FLOW, API_ENDPOINTS, etc.
+  title        String        // Human-readable title
+  mermaid      String?       // Mermaid.js diagram syntax
+  summary      String        // LLM-generated summary
+  confidence   Float         @default(0.0) // AI confidence score
+  
+  // Chart data (JSON format)
+  chartData    Json?         // Chart.js compatible data
+  
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+// ---- Conversation & Voice Models ----
+model Conversation {
+  id           String      @id @default(uuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repositoryId String
+  repository   Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  
+  title        String?     // Auto-generated or user-set
+  messages     Message[]
+  vapiCalls    VapiCall[]
+  
+  // Vapi session tracking
+  vapiCallId   String?     // Vapi call session ID
+  isVoiceActive Boolean    @default(false)
+  
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  role           MessageRole  // USER, ASSISTANT, SYSTEM
+  content        String       // Text content
+  
+  // Vapi voice fields
+  isVoice        Boolean      @default(false)
+  vapiMessageId  String?      // Vapi message ID for tracking
+  audioUrl       String?      // Vapi audio recording URL
+  duration       Int?         // Audio duration in seconds
+  transcript     String?      // Vapi STT transcript
+  
+  // Groq API fields
+  groqModel      GroqModel?   // Specific Groq model used
+  groqTokensUsed Int?         // Token consumption tracking
+  groqLatency    Int?         // Response time in ms
+  
+  // AI-specific fields (for assistant messages)
+  sources        Json?        // Referenced code files/lines
+  diagrams       Json?        // Generated diagrams data
+  charts         Json?        // Generated charts data
+  
+  createdAt      DateTime     @default(now())
+}
+
+// ---- Analytics & Insights ----
+model RepoInsight {
+  id           String      @id @default(uuid())
+  repositoryId String
+  repository   Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  
+  type         InsightType // LANGUAGE_STATS, COMPLEXITY, DEPENDENCIES, etc.
+  data         Json        // Flexible data storage
+  
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  
+  @@unique([repositoryId, type])
+}
+
+// ---- API Usage Tracking ----
+model ApiUsage {
+  id           String      @id @default(uuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  service      ApiService  // GROQ, VAPI, OPENAI
+  operation    String      // "chat_completion", "voice_call", "embedding"
+  tokensUsed   Int?        // For LLM calls
+  duration     Int?        // For voice calls (seconds)
+  cost         Float?      // Estimated cost in USD
+  
+  // Request metadata
+  model        String?     // groq model, vapi voice, etc.
+  groqModel    GroqModel?  // Specific Groq model if applicable
+  metadata     Json?       // Additional context
+  
+  createdAt    DateTime    @default(now())
+}
+
+// ---- Vapi Call Sessions ----
+model VapiCall {
+  id           String       @id @default(uuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String?
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  
+  vapiCallId   String       @unique // Vapi's call ID
+  status       VapiCallStatus
+  duration     Int?         // Call duration in seconds
+  cost         Float?       // Call cost
+  
+  // Call metadata
+  phoneNumber  String?      // If using phone calls
+  recordingUrl String?      // Call recording URL
+  transcript   String?      // Full call transcript
+  
+  startedAt    DateTime
+  endedAt      DateTime?
+  createdAt    DateTime     @default(now())
+}
+
+// ---- Enums ----
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum FileType {
+  FILE
+  DIRECTORY
+}
+
+enum AnalysisType {
+  ARCHITECTURE
+  AUTH_FLOW
+  API_ENDPOINTS
+  DATABASE_SCHEMA
+  DEPENDENCIES
+  CLASS_DIAGRAM
+  SEQUENCE_DIAGRAM
+  COMPONENT_DIAGRAM
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum InsightType {
+  LANGUAGE_STATS
+  FILE_STRUCTURE
+  COMPLEXITY_METRICS
+  DEPENDENCY_GRAPH
+  COMMIT_ACTIVITY
+  CODE_QUALITY
+}
+
+enum ApiService {
+  GROQ
+  VAPI
+  OPENAI
+  HUGGINGFACE
+}
+
+enum VapiCallStatus {
+  INITIATED
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum GroqModel {
+  LLAMA3_8B_8192      // Fast responses, general chat
+  LLAMA3_70B_8192     // Complex code analysis, better reasoning
+  MIXTRAL_8X7B_32768  // Best for summarization, long context
+  GEMMA_7B_IT         // Good balance of speed and quality
+  LLAMA3_GROQ_70B_8192_TOOL_USE_PREVIEW // Function calling
+}
