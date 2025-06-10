@@ -10,7 +10,6 @@ datasource db {
   extensions = [pgvector(map: "vector")]
 }
 
-// ---- Core Models ----
 model User {
   id            String         @id @default(uuid())
   githubId      String         @unique
@@ -39,25 +38,22 @@ model Repository {
   id            String          @id @default(uuid())
   githubUrl     String          @unique
   name          String
-  fullName      String          // owner/repo-name
+  fullName      String          
   description   String?
-  language      String?         // Primary language
+  language      String?         
   stars         Int             @default(0)
   forks         Int             @default(0)
-  size          Int             @default(0) // KB
+  size          Int             @default(0) 
   userId        String
   user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  // Status tracking
   status        ProcessingStatus @default(PENDING)
   errorMessage  String?
-  
-  // Timestamps  
+ 
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   lastSynced    DateTime?
   
-  // Relations
   embeddings    CodeEmbedding[]
   analyses      CodeAnalysis[]
   conversations Conversation[]
@@ -65,7 +61,6 @@ model Repository {
   insights      RepoInsight[]
 }
 
-// ---- File Structure Models ----
 model FileNode {
   id           String     @id @default(uuid())
   repositoryId String
